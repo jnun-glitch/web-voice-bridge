@@ -3,7 +3,6 @@ package de.maxhenkel.webbridge.voice;
 import de.maxhenkel.webbridge.WebVoiceBridgePlugin;
 import de.maxhenkel.webbridge.server.WebSocketHandler;
 import de.maxhenkel.voicechat.api.Entity;
-import de.maxhenkel.voicechat.api.ServerPlayer;
 import de.maxhenkel.voicechat.api.VoicechatApi;
 import de.maxhenkel.voicechat.api.VoicechatConnection;
 import de.maxhenkel.voicechat.api.VoicechatServerApi;
@@ -73,8 +72,7 @@ public class VoiceBridgeManager {
                 .build();
         api.registerAudioListener(listener);
 
-        ServerPlayer serverPlayer = api.fromServerPlayer(player.getHandle());
-        Entity entity = serverPlayer.getEntity();
+        Entity entity = api.fromEntity(player);
         UUID channelUuid = UUID.randomUUID();
         EntityAudioChannel channel = api.createEntityAudioChannel(channelUuid, entity);
 
@@ -94,7 +92,7 @@ public class VoiceBridgeManager {
 
         api.unregisterAudioListener(session.listener());
         if (session.channel() != null && !session.channel().isClosed()) {
-            session.channel().close();
+            session.channel().flush();
         }
         session.decoder().close();
         session.encoder().close();
@@ -118,7 +116,7 @@ public class VoiceBridgeManager {
         onBrowserAudio(playerUuid, pcmData, false);
     }
 
-    private void handleSoundPacketForBrowser(UUID playerUuid, SoundPacket<?> packet) {
+    private void handleSoundPacketForBrowser(UUID playerUuid, SoundPacket packet) {
         BrowserSession session = sessions.get(playerUuid);
         if (session == null) return;
 
@@ -147,7 +145,7 @@ public class VoiceBridgeManager {
     }
 
     public void onPlayerConnected(PlayerConnectedEvent event) {
-        UUID uuid = event.getPlayerUuid();
+        UUID uuid = event.getConnection().getPlayer().getUuid();
         if (sessions.containsKey(uuid)) return;
         broadcastPlayerLists();
     }
