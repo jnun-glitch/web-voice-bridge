@@ -4,7 +4,7 @@ main: de.maxhenkel.webbridge.WebVoiceBridgePlugin
 api-version: '1.21'
 description: Connect to Minecraft voice chat from your browser
 author: WebVoiceBridge
-depend: [voicechat]
+softdepend: [voicechat]
 commands:
   connect:
     description: Generate a pairing code to connect from the browser

@@ -35,6 +35,7 @@ public class WebVoiceBridgePlugin extends JavaPlugin implements VoicechatPlugin,
     private GitHubGist gitHubGist;
 
     private VoicechatApi api;
+    private boolean registeredWithVC = false;
 
     @Override
     public void onEnable() {
@@ -47,7 +48,15 @@ public class WebVoiceBridgePlugin extends JavaPlugin implements VoicechatPlugin,
         getCommand("connect").setExecutor(this);
         getServer().getPluginManager().registerEvents(this, this);
 
-        registerWithVoicechat();
+        Bukkit.getScheduler().runTaskLater(this, () -> {
+            registerWithVoicechat();
+        }, 20L);
+
+        Bukkit.getScheduler().runTaskTimer(this, () -> {
+            if (!registeredWithVC) {
+                registerWithVoicechat();
+            }
+        }, 40L, 100L);
 
         getLogger().info("WebVoiceBridge enabled!");
     }
@@ -64,13 +73,16 @@ public class WebVoiceBridgePlugin extends JavaPlugin implements VoicechatPlugin,
     }
 
     private void registerWithVoicechat() {
+        if (registeredWithVC) return;
+
         BukkitVoicechatService service = Bukkit.getServicesManager().load(BukkitVoicechatService.class);
         if (service == null) {
-            getLogger().warning("Simple Voice Chat not found! WebVoiceBridge requires Simple Voice Chat to be installed.");
+            getLogger().info("Simple Voice Chat not yet available, retrying...");
             return;
         }
         service.registerPlugin(this);
-        getLogger().info("Registered with Simple Voice Chat API");
+        registeredWithVC = true;
+        getLogger().info("Successfully registered with Simple Voice Chat API!");
     }
 
     @Override
@@ -81,7 +93,7 @@ public class WebVoiceBridgePlugin extends JavaPlugin implements VoicechatPlugin,
     @Override
     public void initialize(VoicechatApi api) {
         this.api = api;
-        getLogger().info("Voice Chat API initialized");
+        getLogger().info("Voice Chat API initialized!");
     }
 
     @Override
@@ -139,8 +151,11 @@ public class WebVoiceBridgePlugin extends JavaPlugin implements VoicechatPlugin,
         Player player = (Player) sender;
 
         if (api == null) {
-            player.sendMessage(ChatColor.RED + "Simple Voice Chat is not available. Please wait a moment and try again.");
-            return true;
+            registerWithVoicechat();
+            if (api == null) {
+                player.sendMessage(ChatColor.RED + "Simple Voice Chat is not available. Please wait a moment and try again.");
+                return true;
+            }
         }
 
         String code = pairingManager.generateCode(player.getUniqueId());
