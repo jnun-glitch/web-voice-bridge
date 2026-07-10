@@ -1,0 +1,15 @@
+name: WebVoiceBridge
+version: '${version}'
+main: de.maxhenkel.webbridge.WebVoiceBridgePlugin
+api-version: '1.21'
+description: Connect to Minecraft voice chat from your browser
+author: WebVoiceBridge
+commands:
+  connect:
+    description: Generate a pairing code to connect from the browser
+    usage: /connect
+    permission: webvoicebridge.connect
+permissions:
+  webvoicebridge.connect:
+    description: Allows generating a pairing code
+    default: true

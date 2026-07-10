@@ -1,0 +1,44 @@
+plugins {
+    id 'java'
+}
+
+apply plugin: 'com.gradleup.shadow'
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+
+base {
+    archivesName = 'web-voice-bridge'
+}
+
+version = '1.0.0'
+group = 'de.maxhenkel.webbridge'
+
+repositories {
+    mavenCentral()
+    maven {
+        url = 'https://hub.spigotmc.org/nexus/content/groups/public/'
+        content {
+            includeGroup 'org.bukkit'
+            includeGroup 'org.spigotmc'
+        }
+    }
+}
+
+dependencies {
+    compileOnly project(':api')
+    compileOnly 'org.spigotmc:spigot-api:26.2-R0.1-SNAPSHOT'
+    compileOnly 'io.netty:netty-all:4.1.115.Final'
+}
+
+processResources {
+    filesMatching('plugin.yml') {
+        expand 'version': version
+    }
+}
+
+shadowJar {
+    archiveClassifier.set('')
+    relocate 'io.netty', 'de.maxhenkel.webbridge.netty'
+}
+
+build.dependsOn shadowJar

@@ -1,0 +1,19 @@
+# Web Voice Bridge Configuration
+
+# The port for the web server
+port: 8080
+
+# The public address of the web server (leave empty to auto-detect)
+# Example: myserver.com or 192.168.1.100
+public-address: ""
+
+# GitHub Personal Access Token for creating Gists
+# Create one at: https://github.com/settings/tokens
+# Required scope: gist
+github-token: ""
+
+# How long pairing codes are valid (in minutes)
+code-expiry: 10
+
+# Enable/disable the GitHub Gist creation
+enable-gist: true

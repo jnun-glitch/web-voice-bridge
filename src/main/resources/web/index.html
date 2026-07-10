@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Voice Bridge</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="pairing-screen" class="screen active">
+        <div class="card">
+            <h1>🎮 Web Voice Bridge</h1>
+            <p>Verbinde dich mit dem Minecraft Server Voice Chat</p>
+            <div class="input-group">
+                <input type="text" id="code-input" placeholder="Pairing Code eingeben (6 Ziffern)" maxlength="6" pattern="[0-9]{6}" autocomplete="off">
+            </div>
+            <button id="connect-btn" onclick="pairWithCode()">Verbinden</button>
+            <div id="pairing-error" class="error hidden"></div>
+        </div>
+    </div>
+
+    <div id="voice-screen" class="screen">
+        <div class="main-layout">
+            <div class="sidebar">
+                <h2>Spieler</h2>
+                <ul id="player-list"></ul>
+            </div>
+
+            <div class="content">
+                <div class="status-bar">
+                    <div id="connection-status" class="status connected">
+                        <span class="dot"></span> Verbunden mit <span id="server-name">Server</span>
+                    </div>
+                    <div id="voice-status" class="voice-status">
+                        <span id="mic-icon" class="mic-icon">🎤</span>
+                        <span id="voice-indicator"></span>
+                    </div>
+                </div>
+
+                <div class="controls">
+                    <button id="mute-btn" class="control-btn" onclick="toggleMute()" title="Mikrofon stumm">
+                        🎤 An
+                    </button>
+                    <button id="deafen-btn" class="control-btn" onclick="toggleDeafen()" title="Sound aus">
+                        🔊 An
+                    </button>
+                </div>
+
+                <div class="chat-area">
+                    <div id="chat-messages" class="chat-messages"></div>
+                    <div class="chat-input-area">
+                        <input type="text" id="chat-input" placeholder="Nachricht schreiben..." onkeypress="if(event.key==='Enter')sendChat()">
+                        <button onclick="sendChat()">Senden</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
