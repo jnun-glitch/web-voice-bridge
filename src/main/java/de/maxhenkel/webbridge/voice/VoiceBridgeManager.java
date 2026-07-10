@@ -21,6 +21,9 @@ import de.maxhenkel.voicechat.api.packets.SoundPacket;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -30,21 +33,36 @@ public class VoiceBridgeManager {
     private final WebVoiceBridgePlugin plugin;
     private final VoicechatServerApi api;
     private final Map<UUID, BrowserSession> sessions = new ConcurrentHashMap<>();
+    private final Map<UUID, UUID> sessionUUIDs = new ConcurrentHashMap<>();
+
+    public static final double WHISPER_DISTANCE = 5.0;
+    public static final double NORMAL_DISTANCE = 48.0;
 
     public VoiceBridgeManager(WebVoiceBridgePlugin plugin, VoicechatApi api) {
         this.plugin = plugin;
         this.api = (VoicechatServerApi) api;
     }
 
+    public String getSessionUUID(UUID playerUuid) {
+        UUID uuid = sessionUUIDs.get(playerUuid);
+        return uuid != null ? uuid.toString() : null;
+    }
+
     public void startSession(UUID playerUuid, WebSocketHandler handler) {
         Player player = Bukkit.getPlayer(playerUuid);
-        if (player == null) return;
+        if (player == null) {
+            handler.sendText("{\"type\":\"error\",\"message\":\"Player not online\"}");
+            return;
+        }
 
         VoicechatConnection connection = api.getConnectionOf(playerUuid);
         if (connection == null) {
             handler.sendText("{\"type\":\"error\",\"message\":\"Player has no voice chat connection\"}");
             return;
         }
+
+        UUID sessionUUID = UUID.randomUUID();
+        sessionUUIDs.put(playerUuid, sessionUUID);
 
         OpusDecoder decoder = api.createDecoder();
         OpusEncoder encoder = api.createEncoder();
@@ -65,41 +83,45 @@ public class VoiceBridgeManager {
         );
         sessions.put(playerUuid, session);
 
-        handler.sendText("{\"type\":\"paired\",\"playerName\":\"" + player.getName() + "\"}");
         sendPlayerList(handler);
-
         plugin.getLogger().info("Browser session started for " + player.getName());
     }
 
     public void stopSession(UUID playerUuid) {
         BrowserSession session = sessions.remove(playerUuid);
+        sessionUUIDs.remove(playerUuid);
         if (session == null) return;
 
         api.unregisterAudioListener(session.listener());
-        if (session.channel() != null) {
+        if (session.channel() != null && !session.channel().isClosed()) {
             session.channel().close();
         }
         session.decoder().close();
         session.encoder().close();
 
-        plugin.getLogger().info("Browser session stopped for " + Bukkit.getOfflinePlayer(playerUuid).getName());
+        Player player = Bukkit.getPlayer(playerUuid);
+        String name = player != null ? player.getName() : "Unknown";
+        plugin.getLogger().info("Browser session stopped for " + name);
+    }
+
+    public void onBrowserAudio(UUID playerUuid, short[] pcmData, boolean whisper) {
+        BrowserSession session = sessions.get(playerUuid);
+        if (session == null) return;
+        if (session.channel().isClosed()) return;
+
+        byte[] opusData = session.encoder().encode(pcmData);
+        session.channel().send(opusData);
+        session.channel().flush();
     }
 
     public void onBrowserAudio(UUID playerUuid, short[] pcmData) {
-        BrowserSession session = sessions.get(playerUuid);
-        if (session == null) return;
-        if (!session.channel().isClosed()) {
-            byte[] opusData = session.encoder().encode(pcmData);
-            session.channel().send(opusData);
-            session.channel().flush();
-        }
+        onBrowserAudio(playerUuid, pcmData, false);
     }
 
     private void handleSoundPacketForBrowser(UUID playerUuid, SoundPacket<?> packet) {
         BrowserSession session = sessions.get(playerUuid);
         if (session == null) return;
 
-        // Prevent echo - skip audio from our own channel
         if (packet.getChannelId().equals(session.channelUuid())) return;
 
         try {
@@ -113,51 +135,79 @@ public class VoiceBridgeManager {
     }
 
     public void onMicrophonePacket(MicrophonePacketEvent event) {
-        // Not needed for current architecture
     }
 
     public void onEntitySoundPacket(EntitySoundPacketEvent event) {
-        // Sound packets are intercepted via PlayerAudioListener
     }
 
     public void onLocationalSoundPacket(LocationalSoundPacketEvent event) {
-        // Sound packets are intercepted via PlayerAudioListener
     }
 
     public void onStaticSoundPacket(StaticSoundPacketEvent event) {
-        // Sound packets are intercepted via PlayerAudioListener
     }
 
     public void onPlayerConnected(PlayerConnectedEvent event) {
-        // Update player list for all connected browsers
+        UUID uuid = event.getPlayerUuid();
+        if (sessions.containsKey(uuid)) return;
+        broadcastPlayerLists();
     }
 
     public void onPlayerDisconnected(PlayerDisconnectedEvent event) {
         UUID uuid = event.getPlayerUuid();
-        if (sessions.containsKey(uuid)) {
-            BrowserSession session = sessions.get(uuid);
-            if (session != null) {
-                session.handler().sendText("{\"type\":\"error\",\"message\":\"Minecraft player disconnected\"}");
-                session.handler().close();
-            }
+        BrowserSession session = sessions.get(uuid);
+        if (session != null) {
+            session.handler().sendText("{\"type\":\"error\",\"message\":\"Minecraft player disconnected\"}");
+            session.handler().close();
             stopSession(uuid);
         }
+        broadcastPlayerLists();
     }
 
     public void onPlayerQuit(UUID playerUuid) {
         stopSession(playerUuid);
+        broadcastPlayerLists();
     }
 
     public void sendPlayerList(WebSocketHandler handler) {
-        StringBuilder json = new StringBuilder("{\"type\":\"players\",\"players\":[");
-        boolean first = true;
+        List<Map<String, String>> players = new ArrayList<>();
         for (Player player : Bukkit.getOnlinePlayers()) {
-            if (!first) json.append(",");
-            json.append("\"").append(player.getName()).append("\"");
-            first = false;
+            Map<String, String> p = new HashMap<>();
+            p.put("uuid", player.getUniqueId().toString());
+            p.put("name", player.getName());
+            players.add(p);
+        }
+
+        StringBuilder json = new StringBuilder("{\"type\":\"player_list\",\"players\":[");
+        for (int i = 0; i < players.size(); i++) {
+            Map<String, String> p = players.get(i);
+            if (i > 0) json.append(",");
+            json.append("{\"uuid\":\"").append(p.get("uuid")).append("\",\"name\":\"").append(p.get("name")).append("\"}");
         }
         json.append("]}");
         handler.sendText(json.toString());
+    }
+
+    private void broadcastPlayerLists() {
+        List<Map<String, String>> players = new ArrayList<>();
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            Map<String, String> p = new HashMap<>();
+            p.put("uuid", player.getUniqueId().toString());
+            p.put("name", player.getName());
+            players.add(p);
+        }
+
+        StringBuilder json = new StringBuilder("{\"type\":\"player_list\",\"players\":[");
+        for (int i = 0; i < players.size(); i++) {
+            Map<String, String> p = players.get(i);
+            if (i > 0) json.append(",");
+            json.append("{\"uuid\":\"").append(p.get("uuid")).append("\",\"name\":\"").append(p.get("name")).append("\"}");
+        }
+        json.append("]}");
+        String msg = json.toString();
+
+        for (BrowserSession session : sessions.values()) {
+            session.handler().sendText(msg);
+        }
     }
 
     public void sendChatToMinecraft(UUID playerUuid, String message) {
@@ -169,14 +219,32 @@ public class VoiceBridgeManager {
         });
     }
 
+    public void sendEmojiToMinecraft(UUID playerUuid, String emoji) {
+        Player player = Bukkit.getPlayer(playerUuid);
+        if (player == null) return;
+
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            Bukkit.broadcastMessage("§7[Web] §f" + player.getName() + " " + emoji);
+        });
+
+        for (BrowserSession session : sessions.values()) {
+            if (!session.playerUuid().equals(playerUuid)) {
+                String name = player != null ? player.getName() : "Unknown";
+                session.handler().sendText("{\"type\":\"emoji\",\"sender\":\"" + name + "\",\"emoji\":\"" + emoji + "\"}");
+            }
+        }
+    }
+
     public boolean hasSession(UUID playerUuid) {
         return sessions.containsKey(playerUuid);
     }
 
     public void shutdown() {
-        for (UUID uuid : sessions.keySet()) {
+        for (UUID uuid : new ArrayList<>(sessions.keySet())) {
             stopSession(uuid);
         }
+        sessions.clear();
+        sessionUUIDs.clear();
     }
 
     private byte[] shortsToBytes(short[] shorts) {

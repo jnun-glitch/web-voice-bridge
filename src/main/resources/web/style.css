@@ -156,6 +156,17 @@ button:active {
     flex-shrink: 0;
 }
 
+.sidebar li.talking .dot {
+    background: #e94560;
+    box-shadow: 0 0 8px #e94560;
+    animation: pulse 0.5s infinite alternate;
+}
+
+@keyframes pulse {
+    from { transform: scale(1); }
+    to { transform: scale(1.3); }
+}
+
 .content {
     flex: 1;
     display: flex;
@@ -204,6 +215,11 @@ button:active {
     opacity: 0.3;
 }
 
+.mic-icon.whisper {
+    opacity: 0.6;
+    filter: hue-rotate(180deg);
+}
+
 #voice-indicator {
     width: 40px;
     height: 20px;
@@ -218,6 +234,7 @@ button:active {
     padding: 12px 20px;
     background: #16213e;
     border-bottom: 1px solid #333;
+    flex-wrap: wrap;
 }
 
 .control-btn {
@@ -233,6 +250,59 @@ button:active {
 
 .control-btn.active {
     background: #e94560;
+}
+
+.control-btn.ptt-active {
+    background: #22c55e;
+    animation: pulse 0.3s infinite alternate;
+}
+
+.volume-control {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 20px;
+    background: #16213e;
+    border-bottom: 1px solid #333;
+    font-size: 13px;
+}
+
+.volume-control label {
+    min-width: 140px;
+    color: #888;
+}
+
+.volume-control input[type="range"] {
+    flex: 1;
+    max-width: 200px;
+    accent-color: #e94560;
+}
+
+.volume-control span {
+    min-width: 40px;
+    text-align: right;
+    color: #aaa;
+}
+
+.emoji-bar {
+    display: flex;
+    gap: 4px;
+    padding: 8px 20px;
+    background: #16213e;
+    border-bottom: 1px solid #333;
+}
+
+.emoji-bar button {
+    background: #0f3460;
+    padding: 6px 10px;
+    font-size: 18px;
+    border-radius: 8px;
+    line-height: 1;
+}
+
+.emoji-bar button:hover {
+    background: #1a4a8a;
+    transform: scale(1.2);
 }
 
 .chat-area {
@@ -265,6 +335,16 @@ button:active {
     font-style: italic;
 }
 
+.chat-messages .msg .emoji-msg {
+    font-size: 32px;
+    animation: popIn 0.3s ease-out;
+}
+
+@keyframes popIn {
+    from { transform: scale(0); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+}
+
 .chat-input-area {
     display: flex;
     gap: 8px;
@@ -291,6 +371,32 @@ button:active {
     font-size: 14px;
 }
 
+/* PTT Overlay */
+.ptt-overlay {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(34, 197, 94, 0.9);
+    color: white;
+    padding: 12px 24px;
+    border-radius: 12px;
+    font-weight: bold;
+    font-size: 16px;
+    display: none;
+    z-index: 1000;
+    animation: fadeIn 0.1s;
+}
+
+.ptt-overlay.active {
+    display: block;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateX(-50%) translateY(10px); }
+    to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar {
     width: 6px;
@@ -312,5 +418,11 @@ button:active {
     }
     .card {
         padding: 24px;
+    }
+    .volume-control {
+        flex-wrap: wrap;
+    }
+    .volume-control input[type="range"] {
+        max-width: 100%;
     }
 }

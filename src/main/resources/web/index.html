@@ -12,7 +12,7 @@
             <h1>🎮 Web Voice Bridge</h1>
             <p>Verbinde dich mit dem Minecraft Server Voice Chat</p>
             <div class="input-group">
-                <input type="text" id="code-input" placeholder="Pairing Code eingeben (6 Ziffern)" maxlength="6" pattern="[0-9]{6}" autocomplete="off">
+                <input type="text" id="code-input" placeholder="Pairing Code (6 Ziffern)" maxlength="6" pattern="[0-9]{6}" autocomplete="off">
             </div>
             <button id="connect-btn" onclick="pairWithCode()">Verbinden</button>
             <div id="pairing-error" class="error hidden"></div>
@@ -44,6 +44,35 @@
                     <button id="deafen-btn" class="control-btn" onclick="toggleDeafen()" title="Sound aus">
                         🔊 An
                     </button>
+                    <button id="ptt-btn" class="control-btn" onclick="togglePTT()" title="Push-to-Talk (Leertaste zum Reden)">
+                        🗣️ PTT
+                    </button>
+                    <button id="whisper-btn" class="control-btn" onclick="toggleWhisper()" title="Flüstern (nur nah hörbar)">
+                        🤫 Flüstern
+                    </button>
+                </div>
+
+                <div class="volume-control">
+                    <label>Mikrofon-Lautstärke:</label>
+                    <input type="range" id="mic-volume" min="0" max="200" value="100" oninput="updateMicVolume(this.value)">
+                    <span id="mic-volume-val">100%</span>
+                </div>
+
+                <div class="volume-control">
+                    <label>Speaker-Lautstärke:</label>
+                    <input type="range" id="speaker-volume" min="0" max="200" value="100" oninput="updateSpeakerVolume(this.value)">
+                    <span id="speaker-volume-val">100%</span>
+                </div>
+
+                <div class="emoji-bar">
+                    <button onclick="sendEmoji('👋')" title="Winken">👋</button>
+                    <button onclick="sendEmoji('😂')" title="Lachen">😂</button>
+                    <button onclick="sendEmoji('❤️')" title="Herz">❤️</button>
+                    <button onclick="sendEmoji('👍')" title="Daumen hoch">👍</button>
+                    <button onclick="sendEmoji('🔥')" title="Feuer">🔥</button>
+                    <button onclick="sendEmoji('😮')" title="Überrascht">😮</button>
+                    <button onclick="sendEmoji('💀')" title="Tot">💀</button>
+                    <button onclick="sendEmoji('🎉')" title="Party">🎉</button>
                 </div>
 
                 <div class="chat-area">

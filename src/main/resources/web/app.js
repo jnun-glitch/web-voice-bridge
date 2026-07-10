@@ -1,205 +1,307 @@
-let ws = null;
-let audioContext = null;
-let micStream = null;
-let workletNode = null;
+let ws;
+let audioContext;
+let processor;
+let gainNode;
+let stream;
 let isMuted = false;
 let isDeafened = false;
-let playbackQueue = [];
-let isPlaying = false;
-const SAMPLE_RATE = 48000;
-const FRAME_SIZE = 960;
+let isPTT = false;
+let isPTTActive = false;
+let isWhisper = false;
+let micVolume = 1.0;
+let speakerVolume = 1.0;
+let sessionUUID;
+let sessionKey;
+let playerUUID;
+let playerName;
 
-function pairWithCode() {
-    const code = document.getElementById('code-input').value.trim();
-    if (code.length !== 6 || !/^\d{6}$/.test(code)) {
-        showError('Bitte einen gueltigen 6-stelligen Code eingeben.');
-        return;
-    }
-
+function connect() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = protocol + '//' + location.host + '/ws';
+    ws = new WebSocket(`${protocol}//${location.host}/ws`);
 
-    ws = new WebSocket(wsUrl);
-    ws.binaryType = 'arraybuffer';
-
-    ws.onopen = function() {
-        ws.send(JSON.stringify({type: 'pair', code: code}));
+    ws.onopen = () => {
+        console.log('WebSocket connected');
     };
 
-    ws.onmessage = function(event) {
-        if (typeof event.data === 'string') {
-            handleTextMessage(JSON.parse(event.data));
+    ws.onmessage = (event) => {
+        if (event.data instanceof Blob) {
+            handleBinaryMessage(event.data);
         } else {
-            handleAudioData(event.data);
+            handleTextMessage(JSON.parse(event.data));
         }
     };
 
-    ws.onclose = function() {
-        showError('Verbindung getrennt.');
-        document.getElementById('pairing-screen').classList.add('active');
-        document.getElementById('voice-screen').classList.remove('active');
-    };
-
-    ws.onerror = function() {
-        showError('Verbindungsfehler.');
+    ws.onclose = () => {
+        console.log('WebSocket closed');
+        setTimeout(connect, 3000);
     };
 }
 
 function handleTextMessage(msg) {
-    switch(msg.type) {
-        case 'paired':
-            document.getElementById('pairing-screen').classList.remove('active');
-            document.getElementById('voice-screen').classList.add('active');
-            document.getElementById('server-name').textContent = msg.playerName;
-            addSystemMessage('Verbunden als ' + msg.playerName);
+    switch (msg.type) {
+        case 'session':
+            sessionUUID = msg.uuid;
+            sessionKey = msg.key;
+            playerUUID = msg.playerUUID;
+            playerName = msg.playerName;
+            document.getElementById('server-name').textContent = playerName;
+            showScreen('voice-screen');
             startAudio();
             break;
-        case 'error':
-            showError(msg.message);
+
+        case 'auth_ok':
+            addSystemMessage('Erfolgreich verbunden!');
             break;
-        case 'players':
+
+        case 'auth_failed':
+            showPairingError('Ungültiger Code oder Code abgelaufen');
+            break;
+
+        case 'chat':
+            addChatMessage(msg.sender, msg.message);
+            break;
+
+        case 'emoji':
+            addEmojiMessage(msg.sender, msg.emoji);
+            break;
+
+        case 'player_list':
             updatePlayerList(msg.players);
             break;
-        case 'chat':
-            addChatMessage(msg.player, msg.message);
+
+        case 'player_talk_start':
+            markTalking(msg.uuid, true);
+            break;
+
+        case 'player_talk_stop':
+            markTalking(msg.uuid, false);
+            break;
+
+        case 'error':
+            addSystemMessage('Fehler: ' + msg.message);
             break;
     }
 }
 
-function handleAudioData(data) {
-    if (isDeafened) return;
-
-    const int16 = new Int16Array(data);
-    const float32 = new Float32Array(int16.length);
-    for (let i = 0; i < int16.length; i++) {
-        float32[i] = int16[i] / 32768.0;
-    }
-
-    playAudioChunk(float32);
+function handleBinaryMessage(blob) {
+    blob.arrayBuffer().then(buffer => {
+        if (!audioContext) return;
+        const int16 = new Int16Array(buffer);
+        const float32 = new Float32Array(int16.length);
+        for (let i = 0; i < int16.length; i++) {
+            float32[i] = int16[i] / 32768.0;
+        }
+        playAudio(float32);
+    });
 }
 
-function playAudioChunk(samples) {
-    if (!audioContext) return;
-
-    const buffer = audioContext.createBuffer(1, samples.length, SAMPLE_RATE);
+function playAudio(samples) {
+    if (isDeafened) return;
+    const buffer = audioContext.createBuffer(1, samples.length, 48000);
     buffer.getChannelData(0).set(samples);
-
     const source = audioContext.createBufferSource();
     source.buffer = buffer;
-    source.connect(audioContext.destination);
-    source.onended = function() {
-        isPlaying = false;
-        processPlaybackQueue();
-    };
-
-    isPlaying = true;
+    const vol = audioContext.createGain();
+    vol.gain.value = speakerVolume;
+    source.connect(vol);
+    vol.connect(audioContext.destination);
     source.start();
-}
-
-function processPlaybackQueue() {
-    if (playbackQueue.length > 0 && !isPlaying) {
-        const next = playbackQueue.shift();
-        playAudioChunk(next);
-    }
 }
 
 async function startAudio() {
     try {
-        audioContext = new (window.AudioContext || window.webkitAudioContext)({
-            sampleRate: SAMPLE_RATE
-        });
-
-        micStream = await navigator.mediaDevices.getUserMedia({
+        stream = await navigator.mediaDevices.getUserMedia({
             audio: {
-                sampleRate: SAMPLE_RATE,
+                sampleRate: 48000,
                 channelCount: 1,
-                echoCancellation: true,
-                noiseSuppression: true
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false
             }
         });
 
-        const source = audioContext.createMediaStreamSource(micStream);
+        audioContext = new AudioContext({ sampleRate: 48000 });
+        const source = audioContext.createMediaStreamSource(stream);
 
-        const processor = audioContext.createScriptProcessor(FRAME_SIZE, 1, 1);
-        processor.onaudioprocess = function(event) {
-            if (isMuted || !ws || ws.readyState !== WebSocket.OPEN) return;
+        gainNode = audioContext.createGain();
+        gainNode.gain.value = micVolume;
+        source.connect(gainNode);
 
-            const inputBuffer = event.inputBuffer.getChannelData(0);
-            let samples;
-            if (inputBuffer.length === FRAME_SIZE) {
-                samples = inputBuffer;
-            } else {
-                samples = resample(inputBuffer, audioContext.sampleRate, SAMPLE_RATE);
+        if (audioContext.audioWorklet) {
+            try {
+                await audioContext.audioWorklet.addModule('processor.js');
+                processor = new AudioWorkletNode(audioContext, 'pcm-processor');
+                processor.port.onmessage = (e) => {
+                    if (e.data === 'tick') {
+                        sendAudioFrame();
+                    }
+                };
+                gainNode.connect(processor);
+                processor.connect(audioContext.destination);
+            } catch (e) {
+                console.warn('AudioWorklet not available, falling back to ScriptProcessor');
+                startScriptProcessor();
             }
+        } else {
+            startScriptProcessor();
+        }
 
-            const int16 = new Int16Array(samples.length);
-            for (let i = 0; i < samples.length; i++) {
-                const s = Math.max(-1, Math.min(1, samples[i]));
-                int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-            }
-
-            ws.send(int16.buffer);
-        };
-
-        source.connect(processor);
-        processor.connect(audioContext.destination);
-
-        addSystemMessage('Mikrofon aktiviert');
-    } catch(err) {
-        addSystemMessage('Mikrofon-Fehler: ' + err.message);
-        console.error('Audio error:', err);
+        setupKeyboardListeners();
+    } catch (e) {
+        console.error('Audio error:', e);
+        addSystemMessage('Mikrofonzugriff verweigert');
     }
 }
 
-function resample(buffer, fromRate, toRate) {
-    if (fromRate === toRate) return buffer;
-    const ratio = fromRate / toRate;
-    const newLength = Math.round(buffer.length / ratio);
-    const result = new Float32Array(newLength);
-    for (let i = 0; i < newLength; i++) {
-        const idx = i * ratio;
-        const low = Math.floor(idx);
-        const high = Math.min(low + 1, buffer.length - 1);
-        const frac = idx - low;
-        result[i] = buffer[low] * (1 - frac) + buffer[high] * frac;
+function startScriptProcessor() {
+    const bufferSize = 960;
+    processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
+    gainNode.connect(processor);
+    processor.connect(audioContext.destination);
+    processor.onaudioprocess = (e) => {
+        if (isMuted || (isPTT && !isPTTActive)) return;
+        const input = e.inputBuffer.getChannelData(0);
+        sendAudioSamples(input);
+    };
+}
+
+function sendAudioFrame() {
+    if (isMuted || (isPTT && !isPTTActive)) return;
+    const input = gainNode.context.createBuffer(1, 960, 48000);
+    // Placeholder - actual implementation reads from processor
+}
+
+function sendAudioSamples(samples) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (isMuted || (isPTT && !isPTTActive)) return;
+
+    const targetSamples = isWhisper ? samples.length / 2 : samples.length;
+    const int16 = new Int16Array(targetSamples);
+    for (let i = 0; i < targetSamples; i++) {
+        let s = isWhisper ? samples[i * 2] : samples[i];
+        s = Math.max(-1, Math.min(1, s));
+        int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
     }
-    return result;
+
+    const msg = {
+        type: 'audio',
+        whisper: isWhisper,
+        samples: Array.from(int16)
+    };
+    ws.send(JSON.stringify(msg));
+}
+
+function pairWithCode() {
+    const code = document.getElementById('code-input').value.trim();
+    if (!/^\d{6}$/.test(code)) {
+        showPairingError('Bitte genau 6 Ziffern eingeben');
+        return;
+    }
+
+    document.getElementById('connect-btn').disabled = true;
+    document.getElementById('connect-btn').textContent = 'Verbinden...';
+
+    connect();
+
+    setTimeout(() => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'pair', code: code }));
+        }
+    }, 500);
 }
 
 function toggleMute() {
     isMuted = !isMuted;
     const btn = document.getElementById('mute-btn');
-    const icon = document.getElementById('mic-icon');
-    if (isMuted) {
-        btn.textContent = '🔇 Aus';
-        btn.classList.add('active');
-        icon.classList.add('muted');
-    } else {
-        btn.textContent = '🎤 An';
-        btn.classList.remove('active');
-        icon.classList.remove('muted');
-    }
+    btn.textContent = isMuted ? '🔇 Stumm' : '🎤 An';
+    btn.classList.toggle('active', isMuted);
+    document.getElementById('mic-icon').classList.toggle('muted', isMuted);
 }
 
 function toggleDeafen() {
     isDeafened = !isDeafened;
     const btn = document.getElementById('deafen-btn');
-    if (isDeafened) {
-        btn.textContent = '🔇 Aus';
-        btn.classList.add('active');
-    } else {
-        btn.textContent = '🔊 An';
-        btn.classList.remove('active');
+    btn.textContent = isDeafened ? '🔇 Taub' : '🔊 An';
+    btn.classList.toggle('active', isDeafened);
+}
+
+function togglePTT() {
+    isPTT = !isPTT;
+    const btn = document.getElementById('ptt-btn');
+    btn.classList.toggle('active', isPTT);
+    if (!isPTT) {
+        isPTTActive = false;
+        btn.classList.remove('ptt-active');
     }
+    addSystemMessage(isPTT ? 'Push-to-Talk aktiviert (Leertaste zum Reden)' : 'Push-to-Talk deaktiviert');
+}
+
+function toggleWhisper() {
+    isWhisper = !isWhisper;
+    const btn = document.getElementById('whisper-btn');
+    btn.classList.toggle('active', isWhisper);
+    document.getElementById('mic-icon').classList.toggle('whisper', isWhisper);
+    addSystemMessage(isWhisper ? 'Flüstern aktiviert - nur nah hörbar' : 'Flüstern deaktiviert');
+}
+
+function updateMicVolume(val) {
+    micVolume = val / 100;
+    document.getElementById('mic-volume-val').textContent = val + '%';
+    if (gainNode) gainNode.gain.value = micVolume;
+}
+
+function updateSpeakerVolume(val) {
+    speakerVolume = val / 100;
+    document.getElementById('speaker-volume-val').textContent = val + '%';
+}
+
+function setupKeyboardListeners() {
+    document.addEventListener('keydown', (e) => {
+        if (e.code === 'Space' && isPTT && !e.repeat) {
+            if (document.activeElement.tagName !== 'INPUT') {
+                e.preventDefault();
+                isPTTActive = true;
+                document.getElementById('ptt-btn').classList.add('ptt-active');
+                document.getElementById('mic-icon').classList.remove('muted');
+            }
+        }
+    });
+
+    document.addEventListener('keyup', (e) => {
+        if (e.code === 'Space' && isPTT) {
+            if (document.activeElement.tagName !== 'INPUT') {
+                e.preventDefault();
+                isPTTActive = false;
+                document.getElementById('ptt-btn').classList.remove('ptt-active');
+                if (isMuted) {
+                    document.getElementById('mic-icon').classList.add('muted');
+                }
+            }
+        }
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.code === 'KeyV' && e.ctrlKey && e.shiftKey) {
+            e.preventDefault();
+            toggleMute();
+        }
+        if (e.code === 'KeyD' && e.ctrlKey && e.shiftKey) {
+            e.preventDefault();
+            toggleDeafen();
+        }
+    });
+}
+
+function sendEmoji(emoji) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'emoji', emoji: emoji }));
 }
 
 function sendChat() {
     const input = document.getElementById('chat-input');
-    const message = input.value.trim();
-    if (!message || !ws || ws.readyState !== WebSocket.OPEN) return;
-
-    ws.send(JSON.stringify({type: 'chat', message: message}));
-    addChatMessage('Du', message);
+    const msg = input.value.trim();
+    if (!msg || !ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'chat', message: msg }));
     input.value = '';
 }
 
@@ -207,7 +309,16 @@ function addChatMessage(sender, message) {
     const div = document.getElementById('chat-messages');
     const msg = document.createElement('div');
     msg.className = 'msg';
-    msg.innerHTML = '<span class="sender">' + escapeHtml(sender) + ':</span> ' + escapeHtml(message);
+    msg.innerHTML = `<span class="sender">${escapeHtml(sender)}</span>: ${escapeHtml(message)}`;
+    div.appendChild(msg);
+    div.scrollTop = div.scrollHeight;
+}
+
+function addEmojiMessage(sender, emoji) {
+    const div = document.getElementById('chat-messages');
+    const msg = document.createElement('div');
+    msg.className = 'msg';
+    msg.innerHTML = `<span class="sender">${escapeHtml(sender)}</span> <span class="emoji-msg">${emoji}</span>`;
     div.appendChild(msg);
     div.scrollTop = div.scrollHeight;
 }
@@ -216,26 +327,38 @@ function addSystemMessage(text) {
     const div = document.getElementById('chat-messages');
     const msg = document.createElement('div');
     msg.className = 'msg';
-    msg.innerHTML = '<span class="system">' + escapeHtml(text) + '</span>';
+    msg.innerHTML = `<span class="system">${escapeHtml(text)}</span>`;
     div.appendChild(msg);
     div.scrollTop = div.scrollHeight;
 }
 
 function updatePlayerList(players) {
-    const list = document.getElementById('player-list');
-    list.innerHTML = '';
-    players.forEach(function(name) {
+    const ul = document.getElementById('player-list');
+    ul.innerHTML = '';
+    players.forEach(p => {
         const li = document.createElement('li');
-        li.innerHTML = '<span class="dot"></span> ' + escapeHtml(name);
-        list.appendChild(li);
+        li.id = 'player-' + p.uuid;
+        li.innerHTML = `<span class="dot"></span>${escapeHtml(p.name)}`;
+        ul.appendChild(li);
     });
 }
 
-function showError(msg) {
+function markTalking(uuid, talking) {
+    const li = document.getElementById('player-' + uuid);
+    if (li) li.classList.toggle('talking', talking);
+}
+
+function showPairingError(msg) {
     const el = document.getElementById('pairing-error');
     el.textContent = msg;
     el.classList.remove('hidden');
-    setTimeout(function() { el.classList.add('hidden'); }, 5000);
+    document.getElementById('connect-btn').disabled = false;
+    document.getElementById('connect-btn').textContent = 'Verbinden';
+}
+
+function showScreen(id) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
 }
 
 function escapeHtml(text) {
@@ -244,6 +367,7 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-document.getElementById('code-input').addEventListener('keypress', function(e) {
+document.getElementById('code-input').addEventListener('keypress', (e) => {
     if (e.key === 'Enter') pairWithCode();
+    if (!/\d/.test(e.key) && e.key !== 'Enter') e.preventDefault();
 });
