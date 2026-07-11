@@ -1,5 +1,5 @@
 services:
-  - type: static_site
+  - type: web
     name: web-voice-bridge
     runtime: static
     buildCommand: echo "done"
