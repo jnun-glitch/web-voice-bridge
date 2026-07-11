@@ -1,0 +1,15 @@
+build/
+.gradle/
+.gradle
+.idea/
+*.jar
+*.class
+*.java
+*.xml
+*.gradle
+*.properties
+.git/
+.gitignore
+LICENSE
+README.md
+render.yaml

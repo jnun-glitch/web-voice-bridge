@@ -1,6 +1,8 @@
 services:
   - type: web
     name: web-voice-bridge
-    runtime: static
-    buildCommand: echo "done"
-    staticPublishPath: src/main/resources/web
+    runtime: docker
+    dockerfilePath: ./web-voice-bridge/Dockerfile
+    envVars:
+      - key: PORT
+        value: "8080"

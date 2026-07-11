@@ -14,6 +14,7 @@ let sessionUUID;
 let playerUUID;
 let playerName;
 let pendingPairCode = null;
+let lastServerHost = null;
 
 let mapPlayers = [];
 let mapScale = 2;
@@ -33,13 +34,22 @@ function connect(pairCode) {
     pendingPairCode = pairCode || null;
 
     let serverHost = location.host;
+    let protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const serverInput = document.getElementById('server-input');
     if (serverInput && serverInput.value.trim()) {
-        serverHost = serverInput.value.trim();
+        let addr = serverInput.value.trim();
+        if (addr.startsWith('ws://')) { protocol = 'ws:'; addr = addr.slice(5); }
+        else if (addr.startsWith('wss://')) { protocol = 'wss:'; addr = addr.slice(6); }
+        serverHost = addr;
     }
 
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(`${protocol}//${serverHost}/ws`);
+    lastServerHost = { host: serverHost, protocol: protocol };
+    setupWs();
+}
+
+function setupWs() {
+    if (!lastServerHost) return;
+    ws = new WebSocket(`${lastServerHost.protocol}//${lastServerHost.host}/ws`);
 
     ws.onopen = () => {
         console.log('WebSocket connected');
@@ -59,7 +69,11 @@ function connect(pairCode) {
 
     ws.onclose = () => {
         console.log('WebSocket closed');
-        setTimeout(() => connect(null), 3000);
+        setTimeout(() => {
+            if (!lastServerHost) return;
+            pendingPairCode = null;
+            setupWs();
+        }, 3000);
     };
 }
 
