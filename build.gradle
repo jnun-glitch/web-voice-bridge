@@ -38,7 +38,6 @@ processResources {
 
 shadowJar {
     archiveClassifier.set('')
-    relocate 'io.netty', 'de.maxhenkel.webbridge.netty'
 }
 
 build.dependsOn shadowJar

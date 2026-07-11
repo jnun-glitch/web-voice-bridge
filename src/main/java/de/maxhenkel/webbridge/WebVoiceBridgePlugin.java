@@ -3,18 +3,7 @@ package de.maxhenkel.webbridge;
 import de.maxhenkel.webbridge.github.GitHubGist;
 import de.maxhenkel.webbridge.server.WebServer;
 import de.maxhenkel.webbridge.voice.VoiceBridgeManager;
-import de.maxhenkel.voicechat.api.BukkitVoicechatService;
-import de.maxhenkel.voicechat.api.VoicechatApi;
-import de.maxhenkel.voicechat.api.VoicechatPlugin;
-import de.maxhenkel.voicechat.api.events.EventRegistration;
-import de.maxhenkel.voicechat.api.events.MicrophonePacketEvent;
-import de.maxhenkel.voicechat.api.events.PlayerConnectedEvent;
-import de.maxhenkel.voicechat.api.events.PlayerDisconnectedEvent;
-import de.maxhenkel.voicechat.api.events.EntitySoundPacketEvent;
-import de.maxhenkel.voicechat.api.events.LocationalSoundPacketEvent;
-import de.maxhenkel.voicechat.api.events.StaticSoundPacketEvent;
 import org.bukkit.Bukkit;
-import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
@@ -24,9 +13,19 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import net.md_5.bungee.api.ChatColor;
+import net.md_5.bungee.api.chat.ClickEvent;
+import net.md_5.bungee.api.chat.ComponentBuilder;
+import net.md_5.bungee.api.chat.HoverEvent;
+import net.md_5.bungee.api.chat.TextComponent;
+import net.md_5.bungee.api.chat.hover.content.Text;
+
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.util.logging.Level;
 
-public class WebVoiceBridgePlugin extends JavaPlugin implements VoicechatPlugin, CommandExecutor, Listener {
+public class WebVoiceBridgePlugin extends JavaPlugin implements CommandExecutor, Listener {
 
     public static WebVoiceBridgePlugin INSTANCE;
     private PairingManager pairingManager;
@@ -34,8 +33,8 @@ public class WebVoiceBridgePlugin extends JavaPlugin implements VoicechatPlugin,
     private VoiceBridgeManager voiceBridge;
     private GitHubGist gitHubGist;
 
-    private VoicechatApi api;
-    private boolean registeredWithVC = false;
+    private volatile Object vcApi;
+    private volatile boolean registeredWithVC = false;
 
     @Override
     public void onEnable() {
@@ -48,15 +47,19 @@ public class WebVoiceBridgePlugin extends JavaPlugin implements VoicechatPlugin,
         getCommand("connect").setExecutor(this);
         getServer().getPluginManager().registerEvents(this, this);
 
-        Bukkit.getScheduler().runTaskLater(this, () -> {
-            registerWithVoicechat();
-        }, 20L);
+        registerWithVoicechat();
 
         Bukkit.getScheduler().runTaskTimer(this, () -> {
             if (!registeredWithVC) {
                 registerWithVoicechat();
             }
         }, 40L, 100L);
+
+        Bukkit.getScheduler().runTaskTimer(this, () -> {
+            if (voiceBridge != null) {
+                voiceBridge.broadcastWorldMap();
+            }
+        }, 20L, 10L);
 
         getLogger().info("WebVoiceBridge enabled!");
     }
@@ -75,66 +78,113 @@ public class WebVoiceBridgePlugin extends JavaPlugin implements VoicechatPlugin,
     private void registerWithVoicechat() {
         if (registeredWithVC) return;
 
-        BukkitVoicechatService service = Bukkit.getServicesManager().load(BukkitVoicechatService.class);
+        Object service = findVoicechatService();
         if (service == null) {
             getLogger().info("Simple Voice Chat not yet available, retrying...");
             return;
         }
-        service.registerPlugin(this);
-        registeredWithVC = true;
-        getLogger().info("Successfully registered with Simple Voice Chat API!");
+
+        try {
+            ClassLoader vcCL = service.getClass().getClassLoader();
+            Class<?> vcPluginClass = Class.forName("de.maxhenkel.voicechat.api.VoicechatPlugin", true, vcCL);
+
+            Object proxy = Proxy.newProxyInstance(vcCL, new Class<?>[]{vcPluginClass}, new VoicechatPluginHandler());
+
+            Method registerMethod = service.getClass().getMethod("registerPlugin", vcPluginClass);
+            registerMethod.invoke(service, proxy);
+
+            registeredWithVC = true;
+            getLogger().info("Successfully registered with Simple Voice Chat API!");
+        } catch (Exception e) {
+            getLogger().log(Level.SEVERE, "Failed to register with Simple Voice Chat", e);
+        }
     }
 
-    @Override
-    public String getPluginId() {
-        return "web_voice_bridge";
+    private Object findVoicechatService() {
+        try {
+            org.bukkit.plugin.Plugin vcPlugin = Bukkit.getPluginManager().getPlugin("voicechat");
+            if (vcPlugin == null) return null;
+
+            Object servicesManager = Bukkit.getServicesManager();
+            Method getRegistrations = servicesManager.getClass().getMethod("getRegistrations", org.bukkit.plugin.Plugin.class);
+            java.util.List<?> registrations = (java.util.List<?>) getRegistrations.invoke(servicesManager, vcPlugin);
+            if (registrations != null) {
+                for (Object rsp : registrations) {
+                    Method getProvider = rsp.getClass().getMethod("getProvider");
+                    Object provider = getProvider.invoke(rsp);
+                    if (provider != null && provider.getClass().getName().equals("de.maxhenkel.voicechat.plugins.impl.BukkitVoicechatServiceImpl")) {
+                        return provider;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            getLogger().log(Level.WARNING, "Error finding voicechat service", e);
+        }
+        return null;
     }
 
-    @Override
-    public void initialize(VoicechatApi api) {
-        this.api = api;
-        getLogger().info("Voice Chat API initialized!");
-    }
+    private class VoicechatPluginHandler implements InvocationHandler {
+        @Override
+        public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+            switch (method.getName()) {
+                case "getPluginId":
+                    return "web_voice_bridge";
 
-    @Override
-    public void registerEvents(EventRegistration registration) {
-        registration.registerEvent(MicrophonePacketEvent.class, event -> {
-            if (voiceBridge != null) {
-                voiceBridge.onMicrophonePacket(event);
+                case "initialize":
+                    vcApi = args[0];
+                    getLogger().info("Voice Chat API initialized!");
+                    return null;
+
+                case "registerEvents":
+                    handleRegisterEvents(args[0]);
+                    getLogger().info("Voice Chat events registered");
+                    return null;
+
+                default:
+                    return null;
             }
-        });
+        }
 
-        registration.registerEvent(EntitySoundPacketEvent.class, event -> {
-            if (voiceBridge != null) {
-                voiceBridge.onEntitySoundPacket(event);
+        private void handleRegisterEvents(Object registration) {
+            try {
+                ClassLoader cl = registration.getClass().getClassLoader();
+
+                registerEventClass(registration, cl,
+                        "de.maxhenkel.voicechat.api.events.MicrophonePacketEvent",
+                        event -> { if (voiceBridge != null) voiceBridge.onMicrophonePacket(event); });
+
+                registerEventClass(registration, cl,
+                        "de.maxhenkel.voicechat.api.events.EntitySoundPacketEvent",
+                        event -> { if (voiceBridge != null) voiceBridge.onEntitySoundPacket(event); });
+
+                registerEventClass(registration, cl,
+                        "de.maxhenkel.voicechat.api.events.LocationalSoundPacketEvent",
+                        event -> { if (voiceBridge != null) voiceBridge.onLocationalSoundPacket(event); });
+
+                registerEventClass(registration, cl,
+                        "de.maxhenkel.voicechat.api.events.StaticSoundPacketEvent",
+                        event -> { if (voiceBridge != null) voiceBridge.onStaticSoundPacket(event); });
+
+                registerEventClass(registration, cl,
+                        "de.maxhenkel.voicechat.api.events.PlayerConnectedEvent",
+                        event -> { if (voiceBridge != null) voiceBridge.onPlayerConnected(event); });
+
+                registerEventClass(registration, cl,
+                        "de.maxhenkel.voicechat.api.events.PlayerDisconnectedEvent",
+                        event -> { if (voiceBridge != null) voiceBridge.onPlayerDisconnected(event); });
+            } catch (Exception e) {
+                getLogger().log(Level.SEVERE, "Failed to register voice chat events", e);
             }
-        });
+        }
 
-        registration.registerEvent(LocationalSoundPacketEvent.class, event -> {
-            if (voiceBridge != null) {
-                voiceBridge.onLocationalSoundPacket(event);
-            }
-        });
+        private void registerEventClass(Object registration, ClassLoader cl,
+                                         String eventClassName, java.util.function.Consumer<Object> handler) throws Exception {
+            Class<?> eventClass = Class.forName(eventClassName, true, cl);
+            Class<?> consumerClass = Class.forName("java.util.function.Consumer", true, cl);
 
-        registration.registerEvent(StaticSoundPacketEvent.class, event -> {
-            if (voiceBridge != null) {
-                voiceBridge.onStaticSoundPacket(event);
-            }
-        });
-
-        registration.registerEvent(PlayerConnectedEvent.class, event -> {
-            if (voiceBridge != null) {
-                voiceBridge.onPlayerConnected(event);
-            }
-        });
-
-        registration.registerEvent(PlayerDisconnectedEvent.class, event -> {
-            if (voiceBridge != null) {
-                voiceBridge.onPlayerDisconnected(event);
-            }
-        });
-
-        getLogger().info("Voice Chat events registered");
+            Method registerMethod = registration.getClass().getMethod("registerEvent", Class.class, consumerClass);
+            registerMethod.invoke(registration, eventClass, handler);
+        }
     }
 
     @Override
@@ -150,9 +200,9 @@ public class WebVoiceBridgePlugin extends JavaPlugin implements VoicechatPlugin,
 
         Player player = (Player) sender;
 
-        if (api == null) {
+        if (vcApi == null) {
             registerWithVoicechat();
-            if (api == null) {
+            if (vcApi == null) {
                 player.sendMessage(ChatColor.RED + "Simple Voice Chat is not available. Please wait a moment and try again.");
                 return true;
             }
@@ -166,10 +216,29 @@ public class WebVoiceBridgePlugin extends JavaPlugin implements VoicechatPlugin,
         String url = "http://" + address + ":" + getConfig().getInt("port", 8080);
 
         player.sendMessage("");
-        player.sendMessage(ChatColor.GREEN + "=== Web Voice Bridge ===");
-        player.sendMessage(ChatColor.YELLOW + "Open: " + ChatColor.AQUA + url);
-        player.sendMessage(ChatColor.YELLOW + "Code: " + ChatColor.WHITE + ChatColor.BOLD + code);
-        player.sendMessage(ChatColor.GRAY + "The code expires in " + getConfig().getInt("code-expiry", 10) + " minutes.");
+
+        player.spigot().sendMessage(new TextComponent(new ComponentBuilder("=== Web Voice Bridge ===")
+                .color(ChatColor.GREEN).create()));
+
+        TextComponent urlMsg = new TextComponent(new ComponentBuilder("Open: ")
+                .color(ChatColor.YELLOW).create());
+        TextComponent urlLink = new TextComponent(new ComponentBuilder(url)
+                .color(ChatColor.AQUA).underlined(true)
+                .event(new ClickEvent(ClickEvent.Action.OPEN_URL, url))
+                .event(new HoverEvent(HoverEvent.Action.SHOW_TEXT, new Text("Klicken um zu öffnen")))
+                .create());
+        urlMsg.addExtra(urlLink);
+        player.spigot().sendMessage(urlMsg);
+
+        player.spigot().sendMessage(new TextComponent(new ComponentBuilder("Code: ")
+                .color(ChatColor.YELLOW)
+                .append(new ComponentBuilder(code)
+                        .color(ChatColor.WHITE).bold(true).create())
+                .create()));
+
+        player.spigot().sendMessage(new TextComponent(new ComponentBuilder("The code expires in " + getConfig().getInt("code-expiry", 10) + " minutes.")
+                .color(ChatColor.GRAY).create()));
+
         player.sendMessage("");
 
         if (getConfig().getBoolean("enable-gist", true) && !getConfig().getString("github-token", "").isEmpty()) {
@@ -184,7 +253,7 @@ public class WebVoiceBridgePlugin extends JavaPlugin implements VoicechatPlugin,
             return;
         }
 
-        voiceBridge = new VoiceBridgeManager(this, api);
+        voiceBridge = new VoiceBridgeManager(this, vcApi);
         int port = getConfig().getInt("port", 8080);
 
         webServer = new WebServer(this, port);
@@ -234,8 +303,8 @@ public class WebVoiceBridgePlugin extends JavaPlugin implements VoicechatPlugin,
         return voiceBridge;
     }
 
-    public VoicechatApi getApi() {
-        return api;
+    public Object getVcApi() {
+        return vcApi;
     }
 
     @EventHandler

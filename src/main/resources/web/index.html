@@ -31,55 +31,73 @@
                     <div id="connection-status" class="status connected">
                         <span class="dot"></span> Verbunden mit <span id="server-name">Server</span>
                     </div>
+                    <div class="tab-buttons">
+                        <button id="tab-voice" class="tab-btn active" onclick="switchTab('voice')">🎤 Voice</button>
+                        <button id="tab-map" class="tab-btn" onclick="switchTab('map')">🗺️ Karte</button>
+                    </div>
                     <div id="voice-status" class="voice-status">
                         <span id="mic-icon" class="mic-icon">🎤</span>
                         <span id="voice-indicator"></span>
                     </div>
                 </div>
 
-                <div class="controls">
-                    <button id="mute-btn" class="control-btn" onclick="toggleMute()" title="Mikrofon stumm">
-                        🎤 An
-                    </button>
-                    <button id="deafen-btn" class="control-btn" onclick="toggleDeafen()" title="Sound aus">
-                        🔊 An
-                    </button>
-                    <button id="ptt-btn" class="control-btn" onclick="togglePTT()" title="Push-to-Talk (Leertaste zum Reden)">
-                        🗣️ PTT
-                    </button>
-                    <button id="whisper-btn" class="control-btn" onclick="toggleWhisper()" title="Flüstern (nur nah hörbar)">
-                        🤫 Flüstern
-                    </button>
+                <div id="tab-voice-content" class="tab-content active">
+                    <div class="controls">
+                        <button id="mute-btn" class="control-btn" onclick="toggleMute()" title="Mikrofon stumm">
+                            🎤 An
+                        </button>
+                        <button id="deafen-btn" class="control-btn" onclick="toggleDeafen()" title="Sound aus">
+                            🔊 An
+                        </button>
+                        <button id="ptt-btn" class="control-btn" onclick="togglePTT()" title="Push-to-Talk (Leertaste zum Reden)">
+                            🗣️ PTT
+                        </button>
+                        <button id="whisper-btn" class="control-btn" onclick="toggleWhisper()" title="Flüstern (nur nah hörbar)">
+                            🤫 Flüstern
+                        </button>
+                    </div>
+
+                    <div class="volume-control">
+                        <label>Mikrofon-Lautstärke:</label>
+                        <input type="range" id="mic-volume" min="0" max="200" value="100" oninput="updateMicVolume(this.value)">
+                        <span id="mic-volume-val">100%</span>
+                    </div>
+
+                    <div class="volume-control">
+                        <label>Speaker-Lautstärke:</label>
+                        <input type="range" id="speaker-volume" min="0" max="200" value="100" oninput="updateSpeakerVolume(this.value)">
+                        <span id="speaker-volume-val">100%</span>
+                    </div>
+
+                    <div class="emoji-bar">
+                        <button onclick="sendEmoji('👋')" title="Winken">👋</button>
+                        <button onclick="sendEmoji('😂')" title="Lachen">😂</button>
+                        <button onclick="sendEmoji('❤️')" title="Herz">❤️</button>
+                        <button onclick="sendEmoji('👍')" title="Daumen hoch">👍</button>
+                        <button onclick="sendEmoji('🔥')" title="Feuer">🔥</button>
+                        <button onclick="sendEmoji('😮')" title="Überrascht">😮</button>
+                        <button onclick="sendEmoji('💀')" title="Tot">💀</button>
+                        <button onclick="sendEmoji('🎉')" title="Party">🎉</button>
+                    </div>
+
+                    <div class="chat-area">
+                        <div id="chat-messages" class="chat-messages"></div>
+                        <div class="chat-input-area">
+                            <input type="text" id="chat-input" placeholder="Nachricht schreiben..." onkeypress="if(event.key==='Enter')sendChat()">
+                            <button onclick="sendChat()">Senden</button>
+                        </div>
+                    </div>
                 </div>
 
-                <div class="volume-control">
-                    <label>Mikrofon-Lautstärke:</label>
-                    <input type="range" id="mic-volume" min="0" max="200" value="100" oninput="updateMicVolume(this.value)">
-                    <span id="mic-volume-val">100%</span>
-                </div>
-
-                <div class="volume-control">
-                    <label>Speaker-Lautstärke:</label>
-                    <input type="range" id="speaker-volume" min="0" max="200" value="100" oninput="updateSpeakerVolume(this.value)">
-                    <span id="speaker-volume-val">100%</span>
-                </div>
-
-                <div class="emoji-bar">
-                    <button onclick="sendEmoji('👋')" title="Winken">👋</button>
-                    <button onclick="sendEmoji('😂')" title="Lachen">😂</button>
-                    <button onclick="sendEmoji('❤️')" title="Herz">❤️</button>
-                    <button onclick="sendEmoji('👍')" title="Daumen hoch">👍</button>
-                    <button onclick="sendEmoji('🔥')" title="Feuer">🔥</button>
-                    <button onclick="sendEmoji('😮')" title="Überrascht">😮</button>
-                    <button onclick="sendEmoji('💀')" title="Tot">💀</button>
-                    <button onclick="sendEmoji('🎉')" title="Party">🎉</button>
-                </div>
-
-                <div class="chat-area">
-                    <div id="chat-messages" class="chat-messages"></div>
-                    <div class="chat-input-area">
-                        <input type="text" id="chat-input" placeholder="Nachricht schreiben..." onkeypress="if(event.key==='Enter')sendChat()">
-                        <button onclick="sendChat()">Senden</button>
+                <div id="tab-map-content" class="tab-content">
+                    <div class="map-container">
+                        <canvas id="world-map" width="800" height="600"></canvas>
+                        <div class="map-controls">
+                            <button onclick="mapZoom(1.5)" title="Reinzoomen">+</button>
+                            <button onclick="mapZoom(0.67)" title="Rauszoomen">−</button>
+                            <button onclick="mapCenter()" title="Auf Spieler zentrieren">⊕</button>
+                            <span id="map-coords" class="map-coords"></span>
+                        </div>
                     </div>
                 </div>
             </div>

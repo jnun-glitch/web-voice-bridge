@@ -11,16 +11,35 @@ let isWhisper = false;
 let micVolume = 1.0;
 let speakerVolume = 1.0;
 let sessionUUID;
-let sessionKey;
 let playerUUID;
 let playerName;
+let pendingPairCode = null;
 
-function connect() {
+let mapPlayers = [];
+let mapScale = 2;
+let mapOffsetX = 0;
+let mapOffsetY = 0;
+let mapDragging = false;
+let mapLastMouse = { x: 0, y: 0 };
+
+function connect(pairCode) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        if (pairCode) {
+            ws.send(JSON.stringify({ type: 'pair', code: pairCode }));
+        }
+        return;
+    }
+
+    pendingPairCode = pairCode || null;
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(`${protocol}//${location.host}/ws`);
 
     ws.onopen = () => {
         console.log('WebSocket connected');
+        if (pendingPairCode) {
+            ws.send(JSON.stringify({ type: 'pair', code: pendingPairCode }));
+            pendingPairCode = null;
+        }
     };
 
     ws.onmessage = (event) => {
@@ -33,7 +52,7 @@ function connect() {
 
     ws.onclose = () => {
         console.log('WebSocket closed');
-        setTimeout(connect, 3000);
+        setTimeout(() => connect(null), 3000);
     };
 }
 
@@ -41,7 +60,6 @@ function handleTextMessage(msg) {
     switch (msg.type) {
         case 'session':
             sessionUUID = msg.uuid;
-            sessionKey = msg.key;
             playerUUID = msg.playerUUID;
             playerName = msg.playerName;
             document.getElementById('server-name').textContent = playerName;
@@ -80,6 +98,11 @@ function handleTextMessage(msg) {
         case 'error':
             addSystemMessage('Fehler: ' + msg.message);
             break;
+
+        case 'world_map':
+            mapPlayers = msg.players || [];
+            drawMap();
+            break;
     }
 }
 
@@ -110,6 +133,11 @@ function playAudio(samples) {
 
 async function startAudio() {
     try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            addSystemMessage('Mikrofon nicht verfügbar - HTTPS erforderlich für Nicht-localhost Zugriff');
+            return;
+        }
+
         stream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 sampleRate: 48000,
@@ -132,12 +160,11 @@ async function startAudio() {
                 await audioContext.audioWorklet.addModule('processor.js');
                 processor = new AudioWorkletNode(audioContext, 'pcm-processor');
                 processor.port.onmessage = (e) => {
-                    if (e.data === 'tick') {
-                        sendAudioFrame();
+                    if (e.data instanceof Float32Array) {
+                        sendAudioSamples(e.data);
                     }
                 };
                 gainNode.connect(processor);
-                processor.connect(audioContext.destination);
             } catch (e) {
                 console.warn('AudioWorklet not available, falling back to ScriptProcessor');
                 startScriptProcessor();
@@ -147,9 +174,14 @@ async function startAudio() {
         }
 
         setupKeyboardListeners();
+        addSystemMessage('Mikrofon aktiviert');
     } catch (e) {
         console.error('Audio error:', e);
-        addSystemMessage('Mikrofonzugriff verweigert');
+        if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+            addSystemMessage('Mikrofon verweigert: Öffne die Seite über HTTPS oder localhost');
+        } else {
+            addSystemMessage('Mikrofonzugriff verweigert - bitte im Browser erlauben');
+        }
     }
 }
 
@@ -165,30 +197,38 @@ function startScriptProcessor() {
     };
 }
 
-function sendAudioFrame() {
-    if (isMuted || (isPTT && !isPTTActive)) return;
-    const input = gainNode.context.createBuffer(1, 960, 48000);
-    // Placeholder - actual implementation reads from processor
-}
-
 function sendAudioSamples(samples) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     if (isMuted || (isPTT && !isPTTActive)) return;
 
-    const targetSamples = isWhisper ? samples.length / 2 : samples.length;
-    const int16 = new Int16Array(targetSamples);
-    for (let i = 0; i < targetSamples; i++) {
-        let s = isWhisper ? samples[i * 2] : samples[i];
-        s = Math.max(-1, Math.min(1, s));
-        int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    let int16;
+    if (isWhisper) {
+        int16 = new Int16Array(960);
+        const ratio = samples.length / 960;
+        for (let i = 0; i < 960; i++) {
+            const idx = i * ratio;
+            const lo = Math.floor(idx);
+            const hi = Math.min(lo + 1, samples.length - 1);
+            const frac = idx - lo;
+            let s = samples[lo] * (1 - frac) + samples[hi] * frac;
+            s = Math.max(-1, Math.min(1, s));
+            int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
+    } else {
+        int16 = new Int16Array(samples.length);
+        for (let i = 0; i < samples.length; i++) {
+            let s = Math.max(-1, Math.min(1, samples[i]));
+            int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
     }
 
-    const msg = {
-        type: 'audio',
-        whisper: isWhisper,
-        samples: Array.from(int16)
-    };
-    ws.send(JSON.stringify(msg));
+    const buffer = new Uint8Array(1 + int16.length * 2);
+    buffer[0] = isWhisper ? 1 : 0;
+    const view = new DataView(buffer.buffer, 1);
+    for (let i = 0; i < int16.length; i++) {
+        view.setInt16(i * 2, int16[i], true);
+    }
+    ws.send(buffer);
 }
 
 function pairWithCode() {
@@ -201,13 +241,7 @@ function pairWithCode() {
     document.getElementById('connect-btn').disabled = true;
     document.getElementById('connect-btn').textContent = 'Verbinden...';
 
-    connect();
-
-    setTimeout(() => {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'pair', code: code }));
-        }
-    }, 500);
+    connect(code);
 }
 
 function toggleMute() {
@@ -371,3 +405,163 @@ document.getElementById('code-input').addEventListener('keypress', (e) => {
     if (e.key === 'Enter') pairWithCode();
     if (!/\d/.test(e.key) && e.key !== 'Enter') e.preventDefault();
 });
+
+function switchTab(tab) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.getElementById('tab-' + tab).classList.add('active');
+    document.getElementById('tab-' + tab + '-content').classList.add('active');
+    if (tab === 'map') {
+        requestAnimationFrame(drawMap);
+        initMapEvents();
+    }
+}
+
+let mapInited = false;
+function initMapEvents() {
+    if (mapInited) return;
+    mapInited = true;
+    const canvas = document.getElementById('world-map');
+    canvas.addEventListener('mousedown', (e) => {
+        mapDragging = true;
+        mapLastMouse = { x: e.clientX, y: e.clientY };
+    });
+    canvas.addEventListener('mousemove', (e) => {
+        if (!mapDragging) return;
+        mapOffsetX += e.clientX - mapLastMouse.x;
+        mapOffsetY += e.clientY - mapLastMouse.y;
+        mapLastMouse = { x: e.clientX, y: e.clientY };
+        drawMap();
+    });
+    canvas.addEventListener('mouseup', () => mapDragging = false);
+    canvas.addEventListener('mouseleave', () => mapDragging = false);
+    canvas.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const factor = e.deltaY > 0 ? 0.9 : 1.1;
+        mapScale = Math.max(0.2, Math.min(20, mapScale * factor));
+        drawMap();
+    });
+}
+
+function mapZoom(factor) {
+    mapScale = Math.max(0.2, Math.min(20, mapScale * factor));
+    drawMap();
+}
+
+function mapCenter() {
+    if (mapPlayers.length === 0) return;
+    const me = mapPlayers.find(p => p.uuid === playerUUID);
+    const target = me || mapPlayers[0];
+    const canvas = document.getElementById('world-map');
+    mapOffsetX = canvas.width / 2 - target.x * mapScale;
+    mapOffsetY = canvas.height / 2 - target.z * mapScale;
+    drawMap();
+}
+
+function drawMap() {
+    const canvas = document.getElementById('world-map');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    canvas.width = canvas.parentElement.clientWidth;
+    canvas.height = canvas.parentElement.clientHeight;
+    const w = canvas.width;
+    const h = canvas.height;
+
+    ctx.fillStyle = '#0a0a1a';
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.save();
+    ctx.translate(w / 2 + mapOffsetX, h / 2 + mapOffsetY);
+
+    const gridSize = 16 * mapScale;
+    if (gridSize > 3) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+        ctx.lineWidth = 1;
+        const startX = Math.floor(-w / 2 / gridSize - Math.abs(mapOffsetX) / gridSize) * gridSize;
+        const startY = Math.floor(-h / 2 / gridSize - Math.abs(mapOffsetY) / gridSize) * gridSize;
+        for (let x = startX; x < w; x += gridSize) {
+            ctx.beginPath();
+            ctx.moveTo(x, -h);
+            ctx.lineTo(x, h);
+            ctx.stroke();
+        }
+        for (let y = startY; y < h; y += gridSize) {
+            ctx.beginPath();
+            ctx.moveTo(-w, y);
+            ctx.lineTo(w, y);
+            ctx.stroke();
+        }
+    }
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, -h);
+    ctx.lineTo(0, h);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-w, 0);
+    ctx.lineTo(w, 0);
+    ctx.stroke();
+
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'center';
+    for (let i = -500; i <= 500; i += 100) {
+        if (i === 0) continue;
+        const px = i * mapScale;
+        if (px > -w && px < w) {
+            ctx.fillText(i, px, 14);
+        }
+        const py = i * mapScale;
+        if (py > -h && py < h) {
+            ctx.fillText(i, -14, py + 4);
+        }
+    }
+
+    const playerColors = [
+        '#4ade80', '#60a5fa', '#f472b6', '#fbbf24',
+        '#a78bfa', '#34d399', '#fb923c', '#f87171',
+        '#22d3ee', '#c084fc'
+    ];
+
+    mapPlayers.forEach((p, i) => {
+        const px = p.x * mapScale;
+        const pz = p.z * mapScale;
+        const color = p.uuid === playerUUID ? '#ffffff' : playerColors[i % playerColors.length];
+
+        const yaw = (p.yaw || 0) * Math.PI / 180;
+        ctx.save();
+        ctx.translate(px, pz);
+        ctx.rotate(yaw);
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(0, -8);
+        ctx.lineTo(-5, 6);
+        ctx.lineTo(5, 6);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+
+        ctx.fillStyle = color;
+        ctx.font = p.uuid === playerUUID ? 'bold 13px sans-serif' : '12px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(p.name, px, pz + 20);
+
+        if (p.uuid === playerUUID) {
+            ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(px, pz, 12, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+    });
+
+    ctx.restore();
+
+    const me = mapPlayers.find(p => p.uuid === playerUUID);
+    const coordsEl = document.getElementById('map-coords');
+    if (me && coordsEl) {
+        coordsEl.textContent = `X: ${Math.round(me.x)} Y: ${Math.round(me.y)} Z: ${Math.round(me.z)}`;
+    }
+}

@@ -8,8 +8,11 @@ import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.http.websocketx.BinaryWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketFrame;
+import org.bukkit.Bukkit;
 
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class WebSocketHandler extends SimpleChannelInboundHandler<WebSocketFrame> {
 
@@ -17,6 +20,10 @@ public class WebSocketHandler extends SimpleChannelInboundHandler<WebSocketFrame
     private ChannelHandlerContext ctx;
     private UUID pairedPlayerUuid;
     private boolean whisperMode = false;
+
+    private static final ConcurrentHashMap<String, AtomicInteger> ATTEMPTS = new ConcurrentHashMap<>();
+    private static final int MAX_ATTEMPTS = 5;
+    private static final long ATTEMPT_WINDOW_MS = 60_000;
 
     public WebSocketHandler(WebVoiceBridgePlugin plugin) {
         this.plugin = plugin;
@@ -66,31 +73,45 @@ public class WebSocketHandler extends SimpleChannelInboundHandler<WebSocketFrame
             return;
         }
 
+        String ip = ctx.channel().remoteAddress().toString();
+        AtomicInteger attempts = ATTEMPTS.computeIfAbsent(ip, k -> new AtomicInteger(0));
+        if (attempts.getAndIncrement() >= MAX_ATTEMPTS) {
+            sendText("{\"type\":\"error\",\"message\":\"Too many attempts, try again later\"}");
+            return;
+        }
+
         UUID playerUuid = plugin.getPairingManager().resolveCode(code);
         if (playerUuid == null) {
             sendText("{\"type\":\"auth_failed\",\"message\":\"Invalid or expired code\"}");
             return;
         }
 
+        plugin.getPairingManager().removeCode(playerUuid);
+
         this.pairedPlayerUuid = playerUuid;
+
         VoiceBridgeManager bridge = plugin.getVoiceBridge();
         if (bridge == null) {
             sendText("{\"type\":\"error\",\"message\":\"Voice system not ready\"}");
             return;
         }
 
-        org.bukkit.entity.Player player = plugin.getServer().getPlayer(playerUuid);
-        if (player == null) {
-            sendText("{\"type\":\"error\",\"message\":\"Player not online\"}");
-            return;
-        }
+        UUID finalPlayerUuid = playerUuid;
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            org.bukkit.entity.Player player = plugin.getServer().getPlayer(finalPlayerUuid);
+            if (player == null) {
+                sendText("{\"type\":\"error\",\"message\":\"Player not online\"}");
+                return;
+            }
 
-        sendText("{\"type\":\"session\",\"uuid\":\"" + bridge.getSessionUUID(playerUuid)
-                + "\",\"playerUUID\":\"" + playerUuid
-                + "\",\"playerName\":\"" + player.getName() + "\"}");
+            bridge.startSession(finalPlayerUuid, WebSocketHandler.this);
 
-        bridge.startSession(playerUuid, this);
-        sendText("{\"type\":\"auth_ok\"}");
+            String sessionUUID = bridge.getSessionUUID(finalPlayerUuid);
+            sendText("{\"type\":\"session\",\"uuid\":\"" + sessionUUID
+                    + "\",\"playerUUID\":\"" + finalPlayerUuid
+                    + "\",\"playerName\":\"" + escapeJson(player.getName()) + "\"}");
+            sendText("{\"type\":\"auth_ok\"}");
+        });
     }
 
     private void handleChat(String message) {
@@ -154,13 +175,22 @@ public class WebSocketHandler extends SimpleChannelInboundHandler<WebSocketFrame
         }
 
         try {
+            if (data.readableBytes() < 3) {
+                data.release();
+                return;
+            }
+            byte flags = data.readByte();
+            boolean whisper = (flags & 1) != 0;
+
             int sampleCount = data.readableBytes() / 2;
             short[] pcmData = new short[sampleCount];
             for (int i = 0; i < sampleCount; i++) {
-                pcmData[i] = data.readShort();
+                int lo = data.readByte() & 0xFF;
+                int hi = data.readByte() & 0xFF;
+                pcmData[i] = (short) (lo | (hi << 8));
             }
             data.release();
-            bridge.onBrowserAudio(pairedPlayerUuid, pcmData, whisperMode);
+            bridge.onBrowserAudio(pairedPlayerUuid, pcmData, whisper);
         } catch (Exception e) {
             data.release();
         }
@@ -176,21 +206,6 @@ public class WebSocketHandler extends SimpleChannelInboundHandler<WebSocketFrame
         if (ctx != null && ctx.channel().isActive()) {
             ctx.writeAndFlush(new BinaryWebSocketFrame(Unpooled.wrappedBuffer(data)));
         }
-    }
-
-    public void sendPlayerList(java.util.List<java.util.Map<String, String>> players) {
-        StringBuilder sb = new StringBuilder("{\"type\":\"player_list\",\"players\":[");
-        for (int i = 0; i < players.size(); i++) {
-            java.util.Map<String, String> p = players.get(i);
-            if (i > 0) sb.append(",");
-            sb.append("{\"uuid\":\"").append(p.get("uuid")).append("\",\"name\":\"").append(p.get("name")).append("\"}");
-        }
-        sb.append("]}");
-        sendText(sb.toString());
-    }
-
-    public void sendPlayerTalking(String uuid, boolean talking) {
-        sendText("{\"type\":\"" + (talking ? "player_talk_start" : "player_talk_stop") + "\",\"uuid\":\"" + uuid + "\"}");
     }
 
     public void close() {
@@ -212,6 +227,15 @@ public class WebSocketHandler extends SimpleChannelInboundHandler<WebSocketFrame
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         ctx.close();
+    }
+
+    public static String escapeJson(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r")
+                .replace("\t", "\\t");
     }
 
     private String extractJsonString(String json, String key) {

@@ -17,7 +17,8 @@ class PCMProcessor extends AudioWorkletProcessor {
         for (let i = 0; i < input.length; i++) {
             this.buffer[this.bufferIndex++] = input[i];
             if (this.bufferIndex >= 960) {
-                this.port.postMessage('tick');
+                const copy = this.buffer.slice(0);
+                this.port.postMessage(copy, [copy.buffer]);
                 this.bufferIndex = 0;
             }
         }

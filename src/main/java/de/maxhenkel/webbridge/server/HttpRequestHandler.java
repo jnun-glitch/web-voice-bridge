@@ -9,12 +9,12 @@ import io.netty.handler.codec.http.DefaultFullHttpResponse;
 import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.FullHttpResponse;
 import io.netty.handler.codec.http.HttpHeaderNames;
-import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
 
 import java.io.InputStream;
 import java.io.StringWriter;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
@@ -44,6 +44,23 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
 
         if (path.startsWith("/ws")) {
             ctx.fireChannelRead(request.retain());
+            return;
+        }
+
+        int queryIdx = path.indexOf('?');
+        if (queryIdx != -1) {
+            path = path.substring(0, queryIdx);
+        }
+
+        try {
+            path = URLDecoder.decode(path, StandardCharsets.UTF_8.name());
+        } catch (Exception e) {
+            sendError(ctx, HttpResponseStatus.BAD_REQUEST, "Bad Request");
+            return;
+        }
+
+        if (path.contains("..")) {
+            sendError(ctx, HttpResponseStatus.FORBIDDEN, "Forbidden");
             return;
         }
 
