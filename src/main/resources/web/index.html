@@ -14,6 +14,9 @@
             <div class="input-group">
                 <input type="text" id="code-input" placeholder="Pairing Code (6 Ziffern)" maxlength="6" pattern="[0-9]{6}" autocomplete="off">
             </div>
+            <div class="input-group">
+                <input type="text" id="server-input" placeholder="MC Server Adresse (optional, z.B. ip:8080)" autocomplete="off">
+            </div>
             <button id="connect-btn" onclick="pairWithCode()">Verbinden</button>
             <div id="pairing-error" class="error hidden"></div>
         </div>

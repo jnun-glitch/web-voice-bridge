@@ -31,8 +31,15 @@ function connect(pairCode) {
     }
 
     pendingPairCode = pairCode || null;
+
+    let serverHost = location.host;
+    const serverInput = document.getElementById('server-input');
+    if (serverInput && serverInput.value.trim()) {
+        serverHost = serverInput.value.trim();
+    }
+
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(`${protocol}//${location.host}/ws`);
+    ws = new WebSocket(`${protocol}//${serverHost}/ws`);
 
     ws.onopen = () => {
         console.log('WebSocket connected');

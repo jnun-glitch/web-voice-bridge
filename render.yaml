@@ -1,0 +1,10 @@
+services:
+  - type: static
+    name: web-voice-bridge
+    runtime: static
+    buildCommand: echo "Static site - no build needed"
+    staticPublishPath: src/main/resources/web
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
